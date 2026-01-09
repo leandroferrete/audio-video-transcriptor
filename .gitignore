@@ -1,0 +1,60 @@
+# Python venvs e caches
+.venv/
+venv*/
+venv_whisperx/
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+.nox/
+.benchmarks/
+
+# Arquivos gerados de input/output/processo (não versionar mídia ou resultados)
+input/
+output/
+*.mkv
+*.mp4
+*.mov
+*.avi
+*.webm
+*.mp3
+*.wav
+*.flac
+*.m4a
+*.whisperx.json
+*.whispercpp.txt
+*.segments.json
+*.plain.txt
+*.transcript.timestamps.txt
+*.meta.json
+*.karaoke.ass
+*.karaoke.mp4
+
+# Modelos/pesos grandes / binários pesados
+whisper-cublas-12.4.0-bin-x64/
+
+# Arquivos temporários / logs
+*.log
+*.tmp
+*.bak
+*.swp
+*.swo
+Thumbs.db
+Desktop.ini
+
+# IDE / Editor
+.vscode/
+.idea/
+*.iml
+
+# Dados sensíveis (tokens)
+*token*
+*Token*.txt

@@ -1,0 +1,16 @@
+1) Modo pasta (igual antes)
+
+python transcribe_folder.py ^
+  --whisper-cli "I:\Renda Extra\Canal Dark Automatizado\POC VIDEO-TRANSCRIPTOR\whisper-cublas-12.4.0-bin-x64\whisper-cli.exe" ^
+  --model "I:\Renda Extra\Canal Dark Automatizado\POC VIDEO-TRANSCRIPTOR\whisper-cublas-12.4.0-bin-x64\models\ggml-large-v3.bin" ^
+  --language pt ^
+  --threads 8
+
+2) Modo arquivo único (áudio ou vídeo)
+
+python transcribe_folder_progress_v2.py ^
+  --input "I:\...\meu_audio.mp3" ^
+  --output "I:\...\output" ^
+  --whisper-cli "...\whisper-cli.exe" ^
+  --model "...\ggml-medium.bin" ^
+  --language pt

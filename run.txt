@@ -1,0 +1,48 @@
+Guia rapido de execucao (ASCII)
+
+GUI (interface grafica)
+- Rode: ABRIR_GUI.bat
+- Ou: python transcribe_gui.py
+
+1) Atalho recomendado (lote/pasta):
+   - Rode `RODAR.bat` ou `1clique_instalar_e_rodar.bat`.
+   - Coloque os arquivos em `input/`; as saidas ficam em `output/`.
+
+2) Transcricao simples (um arquivo) sem karaoke:
+cd /d "%~dp0"
+python transcribe_pro_karaoke_docker.py ^
+  --input "input\teste.mkv" ^
+  --output "output" ^
+  --whisper-cli "whisper-cublas-12.4.0-bin-x64\whisper-cli.exe" ^
+  --model "whisper-cublas-12.4.0-bin-x64\models\ggml-large-v3.bin" ^
+  --language pt ^
+  --threads 8
+
+3) Karaoke aproximado (sem WhisperX):
+cd /d "%~dp0"
+python transcribe_pro_karaoke_docker.py ^
+  --input "input\teste.mkv" ^
+  --output "output" ^
+  --whisper-cli "whisper-cublas-12.4.0-bin-x64\whisper-cli.exe" ^
+  --model "whisper-cublas-12.4.0-bin-x64\models\ggml-large-v3.bin" ^
+  --language pt ^
+  --threads 8 ^
+  --karaoke ^
+  --karaoke-engine approx
+
+4) Karaoke preciso (WhisperX local CLI):
+cd /d "%~dp0"
+python transcribe_pro_karaoke_docker.py ^
+  --input "input\teste.mkv" ^
+  --output "output" ^
+  --whisper-cli "whisper-cublas-12.4.0-bin-x64\whisper-cli.exe" ^
+  --model "whisper-cublas-12.4.0-bin-x64\models\ggml-large-v3.bin" ^
+  --language pt ^
+  --threads 8 ^
+  --karaoke ^
+  --karaoke-engine whisperx ^
+  --whisperx-cli "venv_whisperx\Scripts\whisperx.exe" ^
+  --whisperx-model medium
+
+5) Diarize (WhisperX) so se o token estiver em variavel de ambiente:
+   setx HUGGINGFACE_HUB_TOKEN "SEU_TOKEN"

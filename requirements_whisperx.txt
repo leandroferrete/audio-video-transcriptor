@@ -1,0 +1,3 @@
+# Instale o PyTorch CUDA antes (use o comando do site oficial do PyTorch)
+# Depois:
+whisperx
