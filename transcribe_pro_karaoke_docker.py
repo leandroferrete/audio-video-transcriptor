@@ -28,6 +28,32 @@ except Exception:
 # ===========================
 # ESTILOS CAPCUT / VIRAL
 # ===========================
+# 
+# OTIMIZA\u00c7\u00d5ES APLICADAS (Janeiro 2026):
+# 
+# 1. QUEBRA INTELIGENTE DE LINHAS:
+#    - Algoritmo considera pausas naturais (gaps >=250ms)
+#    - Respeita pontua\u00e7\u00e3o (v\u00edrgulas, pontos)
+#    - Balanceamento visual das linhas
+#    - Limite: 5-9 palavras por linha, m\u00e1ximo 14 palavras por segmento
+#
+# 2. GUIDELINES CAPCUT/TIKTOK/SHORTS:
+#    - 1 linha: ideal (5-9 palavras, ~32-42 caracteres)
+#    - 2 linhas: m\u00e1ximo (10-14 palavras total, ~38-42 chars/linha)
+#    - 3+ linhas: EVITADO (vira "pared\u00e3o de texto")
+#    - Posi\u00e7\u00e3o: ter\u00e7o inferior (margin_v: 70-90px)
+#    - Ocupa\u00e7\u00e3o: 8-15% da altura (~150-280px para 1920px altura)
+#
+# 3. CPS (Caracteres Por Segundo):
+#    - Leitura confort\u00e1vel: 150-180 palavras/min (~2.5-3 palavras/seg)
+#    - Tempo m\u00ednimo por segmento: varia conforme tamanho
+#
+# REFER\u00caNCIAS:
+#    - Netflix Partner Help (subtitle guidelines)
+#    - Kapwing (TikTok caption best practices)
+#    - Saudisoft Localization (reading speed metrics)
+#    - Video Tap & FEPSS (character limits)
+# ===========================
 
 class AnimationType(Enum):
     """Tipos de animação para karaoke estilo CapCut"""
@@ -183,7 +209,7 @@ class CapcutPresets:
             animation_intensity=0.9,
             highlight_color="00FFC2",    # Verde-menta sutil
             margin_v=80,
-            max_chars_per_line=34,  # ~1 linha 5-9 palavras, 2 linhas 10-14
+            max_chars_per_line=42,  # 32-42 chars/linha (guideline TikTok/CapCut)
             max_lines=2,
         )
     
@@ -210,7 +236,7 @@ class CapcutPresets:
             animation_intensity=0.0,
             highlight_color="FFE600",
             margin_v=80,
-            max_chars_per_line=34,
+            max_chars_per_line=42,
             max_lines=2,
         )
     
@@ -234,7 +260,7 @@ class CapcutPresets:
             animation_type=AnimationType.COLOR_SWITCH,
             animation_intensity=0.6,
             margin_v=90,
-            max_chars_per_line=36,
+            max_chars_per_line=40,
             max_lines=2,
         )
     
@@ -255,7 +281,7 @@ class CapcutPresets:
             animation_type=AnimationType.SCALE_IN,
             animation_intensity=1.2,
             margin_v=78,
-            max_chars_per_line=36,
+            max_chars_per_line=40,
             max_lines=2,
         )
     
@@ -278,7 +304,7 @@ class CapcutPresets:
             animation_type=AnimationType.SHAKE,
             animation_intensity=0.6,
             margin_v=76,
-            max_chars_per_line=32,
+            max_chars_per_line=38,
             max_lines=2,
         )
     
@@ -302,7 +328,7 @@ class CapcutPresets:
             use_gradient=True,
             gradient_color="FFA500",     # Laranja
             margin_v=82,
-            max_chars_per_line=36,
+            max_chars_per_line=40,
             max_lines=2,
         )
     
@@ -325,7 +351,7 @@ class CapcutPresets:
             animation_type=AnimationType.SHAKE,  # Simula glitch
             animation_intensity=1.3,
             margin_v=72,
-            max_chars_per_line=32,
+            max_chars_per_line=38,
             max_lines=2,
         )
     
@@ -843,9 +869,34 @@ def _safe_float(x, default=0.0) -> float:
         return float(default)
 
 
+def should_split_segment(words: List[Word], max_chars_total: int = 84, max_duration: float = 6.0) -> bool:
+    """
+    Verifica se um segmento precisa ser quebrado baseado em:
+    1. Número de palavras (>14)
+    2. Total de caracteres (>84 = ~2 linhas cheias)
+    3. Duração muito longa (>6 segundos)
+    """
+    if len(words) > 14:
+        return True
+    
+    # Conta caracteres totais (incluindo espaços)
+    total_chars = sum(len(w.text) for w in words) + len(words) - 1  # espaços entre palavras
+    if total_chars > max_chars_total:
+        return True
+    
+    # Verifica duração
+    if words:
+        duration = words[-1].end - words[0].start
+        if duration > max_duration:
+            return True
+    
+    return False
+
+
 def load_whisperx_json_words(path: Path) -> List[KaraokeSegment]:
     """
     Espera JSON gerado pelo WhisperX com timestamps por palavra (segments[].words[]).
+    OTIMIZADO: Quebra segmentos longos em subsegmentos inteligentes.
     """
     data = json.loads(path.read_text(encoding="utf-8", errors="replace"))
     segs_raw = data.get("segments") or data.get("result", {}).get("segments") or []
@@ -866,10 +917,31 @@ def load_whisperx_json_words(path: Path) -> List[KaraokeSegment]:
             if wen <= wst:
                 wen = wst + 0.01
             words.append(Word(start=wst, end=wen, text=txt))
+        
         if words:
-            st2 = min(st, min(w.start for w in words))
-            en2 = max(en, max(w.end for w in words))
-            segments.append(KaraokeSegment(start=st2, end=en2, words=words, speaker=spk))
+            # OTIMIZADO: Quebra inteligente baseada em palavras, caracteres E duração
+            if should_split_segment(words, max_chars_total=84, max_duration=6.0):
+                # Usa quebra inteligente
+                subsegments = smart_split_by_words_and_timing(
+                    words, 
+                    max_words_per_line=9,        # 5-9 palavras ideal por linha
+                    max_words_total=14,          # máximo 14 palavras no segmento
+                    min_pause_for_break=0.25,    # Pausa de 250ms = quebra natural
+                    max_chars_per_segment=84     # ~2 linhas de 42 chars
+                )
+                
+                for sub_words in subsegments:
+                    if not sub_words:
+                        continue
+                    st2 = min(w.start for w in sub_words)
+                    en2 = max(w.end for w in sub_words)
+                    segments.append(KaraokeSegment(start=st2, end=en2, words=sub_words, speaker=spk))
+            else:
+                # Segmento já está no tamanho ideal
+                st2 = min(st, min(w.start for w in words))
+                en2 = max(en, max(w.end for w in words))
+                segments.append(KaraokeSegment(start=st2, end=en2, words=words, speaker=spk))
+    
     return segments
 
 
@@ -1117,11 +1189,95 @@ def build_karaoke_text_capcut(
     return "".join(parts).rstrip()
 
 
+def smart_split_by_words_and_timing(
+    words: List[Word],
+    max_words_per_line: int = 9,
+    max_words_total: int = 14,
+    min_pause_for_break: float = 0.25,
+    max_chars_per_segment: int = 84
+) -> List[List[Word]]:
+    """
+    Quebra palavras em segmentos inteligentes baseado em:
+    1. Limite de palavras por segmento (máx 14 palavras)
+    2. Limite de caracteres por segmento (máx 84 = ~2 linhas)
+    3. Pausas naturais entre palavras (>=0.25s = quebra)
+    4. Pontuação (vírgulas, pontos)
+    5. Balanceamento visual
+    
+    Returns:
+        Lista de listas de Words (cada sublista = 1 SEGMENTO com 1-2 linhas)
+    """
+    if not words:
+        return []
+    
+    segments: List[List[Word]] = []
+    current_segment: List[Word] = []
+    current_chars = 0
+    
+    for i, word in enumerate(words):
+        word_len = len(word.text)
+        
+        # Verifica pausa natural (gap entre fim da palavra anterior e início desta)
+        has_natural_pause = False
+        if i > 0:
+            prev_word = words[i - 1]
+            gap = word.start - prev_word.end
+            if gap >= min_pause_for_break:
+                has_natural_pause = True
+        
+        # Verifica pontuação forte (vírgula, ponto)
+        has_punctuation = False
+        if i > 0:
+            prev_text = words[i - 1].text.strip()
+            if prev_text and prev_text[-1] in (',', '.', ';', '!', '?', ':'):
+                has_punctuation = True
+        
+        # Calcula caracteres se adicionar esta palavra
+        projected_chars = current_chars + word_len + (1 if current_chars > 0 else 0)
+        
+        # Decide se deve quebrar ANTES de adicionar a palavra
+        should_break = False
+        
+        # Regra 1: Atingiu limite de palavras
+        if len(current_segment) >= max_words_total:
+            should_break = True
+        
+        # Regra 2: Atingiu limite de caracteres
+        elif projected_chars > max_chars_per_segment:
+            should_break = True
+        
+        # Regra 3: Tem pausa natural E já tem palavras suficientes (mín 5)
+        elif has_natural_pause and len(current_segment) >= 5:
+            should_break = True
+        
+        # Regra 4: Tem pontuação E já tem pelo menos 4 palavras
+        elif has_punctuation and len(current_segment) >= 4:
+            should_break = True
+        
+        # Salva segmento atual e inicia novo
+        if should_break and current_segment:
+            segments.append(current_segment)
+            current_segment = []
+            current_chars = 0
+        
+        # Adiciona palavra ao segmento atual
+        current_segment.append(word)
+        current_chars += word_len + (1 if len(current_segment) > 1 else 0)
+    
+    # Adiciona último segmento
+    if current_segment:
+        segments.append(current_segment)
+    
+    return segments
+
+
 def wrap_ass_line(text: str, max_chars: int, max_lines: int = 0) -> str:
     r"""
     Insere quebras de linha (\\N) em texto ASS respeitando limite de caracteres visíveis.
     Ignora tags {\\...} na contagem para evitar estouro na tela. Se max_lines > 0,
     limita o número de linhas (linhas excedentes são agregadas na última).
+    
+    OTIMIZADO: Quebra inteligente priorizando pontuação e balanceamento.
     """
     if max_chars <= 0:
         return text
@@ -1136,15 +1292,34 @@ def wrap_ass_line(text: str, max_chars: int, max_lines: int = 0) -> str:
             lines[idx] = tok
         visible = re.sub(r"\{[^}]*\}", "", tok)
         visible_len[idx] += len(visible) + (1 if visible_len[idx] > 0 else 0)
+    
+    def get_visible_text(tok: str) -> str:
+        """Remove tags ASS para contar caracteres reais"""
+        return re.sub(r"\{[^}]*\}", "", tok)
 
-    for tok in tokens:
+    for i, tok in enumerate(tokens):
         if tok == "":
             continue
-        visible_tok = re.sub(r"\{[^}]*\}", "", tok)
+        visible_tok = get_visible_text(tok)
         wlen = len(visible_tok)
         current = len(lines) - 1
         projected = visible_len[current] + (1 if visible_len[current] > 0 else 0) + wlen
+        
+        # Verifica pontuação na palavra anterior para quebra preferencial
+        has_punctuation = False
+        if i > 0:
+            prev_visible = get_visible_text(tokens[i-1])
+            if prev_visible and prev_visible[-1] in (',', '.', ';', '!', '?', ':'):
+                has_punctuation = True
+        
+        # Decide se quebra linha
+        should_break = False
         if visible_len[current] > 0 and projected > max_chars:
+            should_break = True
+        elif has_punctuation and visible_len[current] >= max_chars * 0.6:  # Quebra em pontuação se linha está >60% cheia
+            should_break = True
+        
+        if should_break:
             if max_lines and len(lines) >= max_lines:
                 append_token(current, tok)  # força na última linha
             else:

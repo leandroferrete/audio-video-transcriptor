@@ -81,6 +81,16 @@ QUALITY_PRESETS = {
     "Qualidade alta (crf 16, preset slow)": {"crf": 16, "preset": "slow"},
 }
 
+# Presets de tamanho de fonte (ajustados para 1920x1080 e 1080x1920)
+FONT_SIZE_PRESETS = {
+    "Padrão do Preset": "",  # vazio = usa o tamanho do preset
+    "Pequeno (38px)": "38",
+    "Médio (46px)": "46",
+    "Grande (54px)": "54",
+    "Extra Grande (62px)": "62",
+    "Gigante (70px)": "70",
+}
+
 
 class App:
     def __init__(self, root: tk.Tk) -> None:
@@ -294,8 +304,12 @@ class App:
                                   values=["auto", "on", "off"], width=22)
         case_combo.grid(row=row, column=1, sticky="ew", padx=(6, 0))
         case_combo.bind("<<ComboboxSelected>>", lambda e: self._normalize_case_var())
-        ttk.Label(right, text="Fonte (vazio = padrão):").grid(row=row, column=2, sticky="e", padx=(6, 4))
-        ttk.Entry(right, textvariable=self.var_capcut_font_size, width=10).grid(row=row, column=3, sticky="w")
+        ttk.Label(right, text="Tamanho Fonte:").grid(row=row, column=2, sticky="e", padx=(6, 4))
+        font_size_combo = ttk.Combobox(right, textvariable=self.var_capcut_font_size, 
+                                       values=list(FONT_SIZE_PRESETS.values()), 
+                                       state="readonly", width=8)
+        font_size_combo.grid(row=row, column=3, sticky="w")
+        font_size_combo.set("")  # Padrão
         row += 1
         self._normalize_case_var()
         
@@ -330,7 +344,7 @@ class App:
             "- WhisperX diarize: precisa token HF em HUGGINGFACE_HUB_TOKEN (ou o env que você setar) e caminho do whisperx-cli (ou imagem Docker).\n"
             "- Watch: monitora a pasta e processa novos arquivos; Keep WAV salva o WAV intermediário.\n"
             "- Glossário/Redact: substitui termos ou remove PII (email/tel/cpf/cnpj).\n"
-            "- Caps/tamanho (CapCut): escolha auto/on/off para CAPSLOCK; fonte vazia usa o tamanho ideal do preset e adapta à largura."
+            "- Caps/tamanho: escolha auto/on/off para CAPSLOCK; tamanho padrão usa o ideal do preset (38-48px). Pode escolher: Pequeno (38px), Médio (46px), Grande (54px), Extra Grande (62px) ou Gigante (70px)."
         )
         ttk.Label(help_box, text=help_text, wraplength=1000, justify="left").pack(anchor="w")
 
@@ -398,29 +412,29 @@ class App:
 - Branco → Amarelo quando ativo
 - Animação POP/Bounce micro
 - ALL CAPS, stroke preto grosso
-- Montserrat Bold
+- Montserrat Bold, 46px
 
 🟡 Viral Flat (sem animação):
 - Mesmo visual do viral, sem animação
 - Amarelo sólido no destaque
-- ALL CAPS, Montserrat
+- ALL CAPS, Montserrat, 46px
 - Stroke preto discreto e caixa leve
 
 ✨ Clean Premium:
 - Minimalista profissional
 - Caixa preta arredondada translúcida
-- Fonte Inter, sem ALL CAPS
+- Fonte Inter 40px, sem ALL CAPS
 - Ideal para podcasts, entrevistas
 - Fade suave
 
 💻 Tutorial Tech:
-- Oswald condensada
+- Oswald condensada 44px
 - Destaque ciano (palavras-chave)
 - Scale-in (cresce de pequeno)
 - Perfeito para tutoriais/tech
 
 🗣️ Storytime/Fofoca:
-- Poppins bold arredondada
+- Poppins bold arredondada 44px
 - Caixa BRANCA com texto preto
 - Shake em palavras de ênfase
 - Estilo "fofoca viral"
@@ -428,23 +442,29 @@ class App:
 💪 Motivacional:
 - Dourado com glow/brilho
 - Gradiente (dourado→laranja)
-- Montserrat, ALL CAPS
+- Montserrat 48px, ALL CAPS
 - Scale + pulse
 - Inspirador/energia
 
 🔪 Terror/True Crime:
 - Vermelho sangue (#FF0000)
-- Shake/glitch em palavras-chave
-- Oswald condensada
-- Caixa preta, suspense
+- Oswald condensada 44px
+- Shake/glitch
+- Suspense máximo
 
-Cada estilo inclui:
-- Fonte customizada
-- Cores específicas
-- Animações (pop, bounce, scale, shake, glow)
-- Timing palavra-por-palavra
-- ALL CAPS ou Title Case
-- Letter spacing ajustado
+📏 TAMANHOS DE FONTE:
+• Padrão: Usa o tamanho ideal de cada preset
+• Pequeno (38px): Mais discreto, mais texto visível
+• Médio (46px): Equilíbrio perfeito (recomendado)
+• Grande (54px): Destaque maior, menos texto
+• Extra Grande (62px): Muito visível, ideal para longe
+• Gigante (70px): Máximo impacto, texto mínimo
+
+⚠️ IMPORTANTE:
+- Tamanhos maiores = menos caracteres por linha
+- Sistema ajusta automaticamente para não estourar
+- Para shorts: 46-54px funciona melhor
+- Para vídeos longos: 38-46px é mais confortável
 """
         messagebox.showinfo("Estilos CapCut/TikTok", help_text)
 
