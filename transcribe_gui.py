@@ -83,12 +83,29 @@ QUALITY_PRESETS = {
 
 # Presets de tamanho de fonte (ajustados para 1920x1080 e 1080x1920)
 FONT_SIZE_PRESETS = {
+    "Automático (adapta ao vídeo)": "auto",  # Calcula baseado na resolução
     "Padrão do Preset": "",  # vazio = usa o tamanho do preset
     "Pequeno (38px)": "38",
     "Médio (46px)": "46",
     "Grande (54px)": "54",
     "Extra Grande (62px)": "62",
     "Gigante (70px)": "70",
+}
+
+# Presets de posicionamento vertical de legenda (mobile + desktop)
+SUBTITLE_POSITION_PRESETS = {
+    "Embaixo (padrão)": "bottom",      # Safe zone Stories/Shorts ~250-450px
+    "Em cima (topo)": "top",           # Safe zone topo ~150-300px
+    "Central (meio)": "center",        # Centro vertical
+    "Automático (inteligente)": "auto" # Detecta melhor área (futuro)
+}
+
+# Presets de alinhamento horizontal do texto
+TEXT_ALIGNMENT_PRESETS = {
+    "Centralizado (padrão)": "center",  # Melhor para legendas virais/karaoke
+    "Esquerda": "left",                 # Estilo documentário/entrevista
+    "Direita": "right",                 # Casos específicos (RTL, etc)
+    "Justificado": "justify"            # Blocos de texto longos
 }
 
 
@@ -276,10 +293,13 @@ class App:
         # Estilo CapCut/Viral
         ttk.Label(right, text="Estilo de Legenda (CapCut/TikTok/Viral)", font=("Segoe UI", 10, "bold")).grid(row=row, column=0, columnspan=4, sticky="w", pady=(8, 4)); row += 1
         
-        self.var_capcut_style = tk.StringVar(value="viral_karaoke")
+        self.var_capcut_style = tk.StringVar(value="mobile_single_word")
         self.var_capcut_case = tk.StringVar(value="auto")  # auto/on/off
-        self.var_capcut_font_size = tk.StringVar(value="")  # vazio = padrão do preset
+        self.var_capcut_font_size = tk.StringVar(value="auto")  # auto = calcula baseado na resolução
+        self.var_subtitle_position = tk.StringVar(value="Embaixo (padrão)")  # posição vertical
+        self.var_text_alignment = tk.StringVar(value="Centralizado (padrão)")  # alinhamento horizontal
         capcut_styles = [
+            ("Mobile - Uma Palavra (karaokê puro)", "mobile_single_word"),
             ("Padrão Viral (karaokê) - Amarelo, Pop, ALL CAPS", "viral_karaoke"),
             ("Viral Flat (CAPS, sem animação) - Amarelo sólido", "viral_flat"),
             ("Clean Premium (podcast) - Minimalista, caixa preta", "clean_premium"),
@@ -306,15 +326,30 @@ class App:
         case_combo.bind("<<ComboboxSelected>>", lambda e: self._normalize_case_var())
         ttk.Label(right, text="Tamanho Fonte:").grid(row=row, column=2, sticky="e", padx=(6, 4))
         font_size_combo = ttk.Combobox(right, textvariable=self.var_capcut_font_size, 
-                                       values=list(FONT_SIZE_PRESETS.values()), 
-                                       state="readonly", width=8)
+                                       values=list(FONT_SIZE_PRESETS.keys()), 
+                                       state="readonly", width=18)
         font_size_combo.grid(row=row, column=3, sticky="w")
-        font_size_combo.set("")  # Padrão
+        font_size_combo.set("Automático (adapta ao vídeo)")  # Padrão
         row += 1
         self._normalize_case_var()
         
+        # Controle de posicionamento vertical (mobile + desktop)
+        ttk.Label(right, text="Posição da Legenda:").grid(row=row, column=0, sticky="w")
+        position_combo = ttk.Combobox(right, textvariable=self.var_subtitle_position,
+                                     values=list(SUBTITLE_POSITION_PRESETS.keys()),
+                                     state="readonly", width=22)
+        position_combo.grid(row=row, column=1, sticky="ew", padx=(6, 0))
+        position_combo.set("Embaixo (padrão)")  # Padrão
+        ttk.Label(right, text="Alinhamento:").grid(row=row, column=2, sticky="e", padx=(6, 4))
+        alignment_combo = ttk.Combobox(right, textvariable=self.var_text_alignment,
+                                      values=list(TEXT_ALIGNMENT_PRESETS.keys()),
+                                      state="readonly", width=12)
+        alignment_combo.grid(row=row, column=3, sticky="w")
+        alignment_combo.set("Centralizado (padrão)")  # Padrão
+        row += 1
+        
         # Descrição do estilo selecionado
-        self.style_desc_label = ttk.Label(right, text=self.get_style_description("viral_karaoke"), foreground="#444", wraplength=450, justify="left")
+        self.style_desc_label = ttk.Label(right, text=self.get_style_description("mobile_single_word"), foreground="#444", wraplength=450, justify="left")
         self.style_desc_label.grid(row=row, column=0, columnspan=4, sticky="w", pady=(2, 4))
         row += 1
         
@@ -386,6 +421,7 @@ class App:
     def get_style_description(self, style_name: str) -> str:
         """Retorna descrição do estilo selecionado."""
         descriptions = {
+            "mobile_single_word": "📱 MOBILE: Uma palavra por vez, amarelo vivo, centro da tela. Ideal para Stories/Shorts/TikTok.",
             "viral_karaoke": "🔥 VIRAL: Branco→Amarelo, POP bounce, ALL CAPS, stroke preto. O mais usado em Reels/TikTok/Shorts.",
             "viral_flat": "🟡 VIRAL FLAT: Amarelo sólido, sem animação, Montserrat ALL CAPS, stroke preto discreto.",
             "clean_premium": "✨ PREMIUM: Minimalista, caixa preta arredondada, Inter, ideal para podcasts/entrevistas.",
@@ -621,9 +657,27 @@ class App:
                 case_val = (self.var_capcut_case.get() or "").lower()
                 if case_val in ("on", "off"):
                     cmd += ["--capcut-uppercase", case_val]
-                fs = self.var_capcut_font_size.get().strip()
-                if fs.isdigit():
-                    cmd += ["--capcut-font-size", fs]
+                
+                # Tamanho da fonte (auto ou valor específico)
+                fs_key = self.var_capcut_font_size.get()
+                fs_value = FONT_SIZE_PRESETS.get(fs_key, "")
+                if fs_value == "auto":
+                    cmd += ["--capcut-font-size", "auto"]
+                elif fs_value.isdigit():
+                    cmd += ["--capcut-font-size", fs_value]
+                # Se vazio, usa o padrão do preset
+                
+                # Posicionamento vertical (mobile + desktop)
+                position_key = self.var_subtitle_position.get()
+                position_value = SUBTITLE_POSITION_PRESETS.get(position_key, "bottom")
+                if position_value != "bottom":  # bottom é padrão
+                    cmd += ["--subtitle-position", position_value]
+                
+                # Alinhamento horizontal do texto
+                alignment_key = self.var_text_alignment.get()
+                alignment_value = TEXT_ALIGNMENT_PRESETS.get(alignment_key, "center")
+                if alignment_value != "center":  # center é padrão
+                    cmd += ["--text-alignment", alignment_value]
         # else: não passa --karaoke (gera só textos)
 
         return cmd

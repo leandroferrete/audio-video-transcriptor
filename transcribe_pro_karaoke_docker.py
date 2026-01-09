@@ -76,6 +76,14 @@ class BackgroundStyle(Enum):
     HIGHLIGHT = "highlight"          # Marca-texto atrás da palavra
 
 
+class SubtitlePosition(Enum):
+    """Posicionamento vertical da legenda (Stories/Shorts safe zones)"""
+    BOTTOM = "bottom"                # Padrão: terço inferior (safe zone ~250-400px)
+    TOP = "top"                      # Topo da tela (safe zone ~150-250px)
+    CENTER = "center"                # Centro vertical
+    AUTO = "auto"                    # Detecta melhor área (evita rostos/ação)
+
+
 @dataclass
 class CapcutStyleConfig:
     """Configuração completa de estilo CapCut para karaoke"""
@@ -86,6 +94,9 @@ class CapcutStyleConfig:
     font_bold: bool = True
     all_caps: bool = True
     letter_spacing: int = 0  # em pixels (\fsp)
+    
+    # Posicionamento
+    subtitle_position: SubtitlePosition = SubtitlePosition.BOTTOM
     
     # Cores (RGB hex: "FFFFFF")
     primary_color: str = "FFFFFF"      # Cor da palavra ativa
@@ -119,6 +130,9 @@ class CapcutStyleConfig:
     max_chars_per_line: int = 28       # Limite de caracteres por linha (para não estourar a tela)
     max_lines: int = 2                 # Limite de linhas (quebra com \\N)
     
+    # Modo especial: uma palavra por vez (estilo karaoke puro)
+    single_word_mode: bool = False     # Se True, mostra apenas 1 palavra por vez (a que está sendo falada)
+    
     def to_dict(self) -> dict:
         """Serializa para JSON/dict"""
         return {
@@ -147,6 +161,7 @@ class CapcutStyleConfig:
             "alignment": self.alignment,
             "max_chars_per_line": self.max_chars_per_line,
             "max_lines": self.max_lines,
+            "single_word_mode": self.single_word_mode,
         }
     
     @staticmethod
@@ -178,6 +193,7 @@ class CapcutStyleConfig:
             alignment=data.get("alignment", 2),
             max_chars_per_line=data.get("max_chars_per_line", 28),
             max_lines=data.get("max_lines", 2),
+            single_word_mode=data.get("single_word_mode", False),
         )
 
 
@@ -356,6 +372,39 @@ class CapcutPresets:
         )
     
     @staticmethod
+    def mobile_single_word() -> CapcutStyleConfig:
+        """Mobile - Uma palavra por vez (estilo karaoke puro)
+        
+        Mostra APENAS a palavra que está sendo falada no momento,
+        destacada em amarelo no centro da tela. Ideal para Stories/Shorts/TikTok.
+        """
+        return CapcutStyleConfig(
+            font_name="Montserrat",
+            font_size=72,               # Fonte grande para destaque
+            font_bold=True,
+            all_caps=True,
+            letter_spacing=2,
+            primary_color="FFFF00",     # Amarelo vivo
+            secondary_color="FFFF00",   # Mesmo amarelo (palavra única)
+            outline_color="000000",     # Contorno preto
+            outline_size=4,             # Contorno mais grosso para legibilidade
+            shadow_depth=2,
+            blur_strength=0.0,
+            background_style=BackgroundStyle.NONE,  # Sem background
+            background_color="000000",
+            background_alpha=0,
+            background_padding=0,
+            animation_type=AnimationType.POP,  # Efeito pop ao aparecer
+            animation_intensity=1.2,
+            highlight_color="FFFF00",
+            margin_v=0,                 # Centralizado verticalmente
+            alignment=5,                # Centro da tela (meio)
+            max_chars_per_line=20,      # Uma palavra geralmente cabe
+            max_lines=1,
+            single_word_mode=True,      # MODO ESPECIAL: uma palavra por vez
+        )
+    
+    @staticmethod
     def get_all_presets() -> Dict[str, CapcutStyleConfig]:
         """Retorna todos os presets disponíveis"""
         return {
@@ -366,6 +415,7 @@ class CapcutPresets:
             "storytime_fofoca": CapcutPresets.storytime_fofoca(),
             "motivacional": CapcutPresets.motivacional(),
             "terror_true_crime": CapcutPresets.terror_true_crime(),
+            "mobile_single_word": CapcutPresets.mobile_single_word(),
         }
     
     @staticmethod
@@ -685,6 +735,31 @@ def sha256_file(path: Path) -> str:
 def file_sig(path: Path) -> Dict[str, object]:
     st = path.stat()
     return {"size": st.st_size, "mtime": st.st_mtime}
+
+
+def detect_video_resolution(ffmpeg_bin: str, media: Path) -> Optional[Tuple[int, int]]:
+    """
+    Usa ffprobe para detectar a resolução (largura x altura) do vídeo.
+    Retorna (width, height) ou None se não conseguir detectar.
+    """
+    ffprobe = Path(ffmpeg_bin).with_name("ffprobe").as_posix()
+    cmd = [
+        ffprobe, "-v", "error",
+        "-select_streams", "v:0",
+        "-show_entries", "stream=width,height",
+        "-of", "csv=p=0",
+        str(media),
+    ]
+    cp = run_cmd(cmd)
+    if cp.returncode != 0 or not cp.stdout.strip():
+        return None
+    try:
+        parts = cp.stdout.strip().split(",")
+        if len(parts) >= 2:
+            return (int(parts[0]), int(parts[1]))
+    except Exception:
+        pass
+    return None
 
 
 def detect_best_audio_stream(ffmpeg_bin: str, media: Path) -> Optional[int]:
@@ -1366,6 +1441,148 @@ def write_ass_karaoke(
     
     w, h = res if res else (1920, 1080)
     
+    # OTIMIZAÇÃO: Detecta orientação (vertical = Stories/Shorts/Reels)
+    is_vertical = h > w  # 9:16 (1080x1920) ou similar
+    is_horizontal = w > h  # 16:9 (1920x1080) ou similar
+    
+    # ========== POSICIONAMENTO INTELIGENTE (Stories/Shorts Safe Zones) ==========
+    # Baseado em guidelines: Instagram Stories, YouTube Shorts, TikTok
+    # Safe zones: Stories ~250px top/bottom, Shorts ~200px top/400px bottom
+    
+    # ASS Alignment numpad:
+    # 7 8 9  (top: left, center, right)
+    # 4 5 6  (middle: left, center, right)
+    # 1 2 3  (bottom: left, center, right)
+    
+    # Usa o alignment configurado (pode vir do args.text_alignment)
+    # Se não foi configurado explicitamente, usa o padrão por posição
+    alignment = style_config.alignment or 2  # Padrão: bottom center
+    calculated_margin_v = style_config.margin_v or 80
+    
+    # Determina a linha base do alignment (1-3=bottom, 4-6=middle, 7-9=top)
+    alignment_row = (alignment - 1) // 3  # 0=bottom, 1=middle, 2=top
+    alignment_col = (alignment - 1) % 3   # 0=left, 1=center, 2=right
+    
+    if style_config.subtitle_position == SubtitlePosition.BOTTOM:
+        # Mantém coluna (left/center/right), força linha bottom
+        alignment = 1 + alignment_col  # 1, 2, ou 3
+        if is_vertical:
+            # MOBILE VERTICAL (Stories/Shorts): Safe zone 250-400px da base
+            calculated_margin_v = int(h * 0.17)  # ~17% da altura (326px em 1920)
+            calculated_margin_v = max(250, min(calculated_margin_v, 450))  # 250-450px
+        else:
+            # DESKTOP HORIZONTAL: 70-120px suficiente
+            calculated_margin_v = max(70, calculated_margin_v)
+    
+    elif style_config.subtitle_position == SubtitlePosition.TOP:
+        # Mantém coluna (left/center/right), força linha top
+        alignment = 7 + alignment_col  # 7, 8, ou 9
+        if is_vertical:
+            # MOBILE VERTICAL: Safe zone ~150-250px do topo
+            calculated_margin_v = int(h * 0.12)  # ~12% da altura (230px em 1920)
+            calculated_margin_v = max(150, min(calculated_margin_v, 300))
+        else:
+            # DESKTOP HORIZONTAL: 50-100px do topo
+            calculated_margin_v = max(50, min(calculated_margin_v, 100))
+    
+    elif style_config.subtitle_position == SubtitlePosition.CENTER:
+        # Mantém coluna (left/center/right), força linha middle
+        alignment = 4 + alignment_col  # 4, 5, ou 6
+        calculated_margin_v = 0  # Centro não usa margin_v
+    
+    elif style_config.subtitle_position == SubtitlePosition.AUTO:
+        # TODO: Detecção inteligente (análise de frames, reconhecimento facial)
+        # Por ora, usa BOTTOM como fallback
+        alignment = 1 + alignment_col  # Mantém alinhamento horizontal
+        if is_vertical:
+            calculated_margin_v = int(h * 0.17)
+            calculated_margin_v = max(250, min(calculated_margin_v, 450))
+        else:
+            calculated_margin_v = max(70, calculated_margin_v)
+    
+    # Atualiza margin_v no config
+    style_config.margin_v = calculated_margin_v
+
+    
+    # ========== CÁLCULO INTELIGENTE DE MAX_CHARS (nunca cortar texto) ==========
+    # PROBLEMA: Texto estava sendo cortado nas bordas laterais
+    # SOLUÇÃO: Calcular baseado na largura real do vídeo, margens ASS e tamanho fonte
+    
+    font_size = style_config.font_size or 52
+    
+    # Margens laterais PROPORCIONAIS à largura do vídeo
+    # Base: 1080px → L=80, R=120 (para botões TikTok/Shorts/Reels)
+    # Escala proporcional para outras resoluções
+    if is_vertical:
+        # Margem proporcional: ~7% esquerda, ~11% direita
+        margin_l_px = max(40, int(w * 0.07))
+        margin_r_px = max(60, int(w * 0.11))  # Mais espaço à direita para botões
+    else:
+        # Horizontal: margens menores
+        margin_l_px = max(40, int(w * 0.03))
+        margin_r_px = max(40, int(w * 0.03))
+    
+    # Largura TOTAL disponível após margens ASS
+    total_usable = w - margin_l_px - margin_r_px
+    
+    # Usar apenas uma porcentagem para segurança adicional
+    if is_vertical:
+        # Mobile: usar 80% do espaço disponível (mais conservador)
+        usable_width = total_usable * 0.80
+    else:
+        # Desktop: usar 90% do espaço disponível
+        usable_width = total_usable * 0.90
+    
+    # Estimativa de largura por caractere
+    # Fontes CAPS e sem serifas ocupam MUITO espaço
+    is_caps = style_config.all_caps if hasattr(style_config, 'all_caps') else True
+    
+    # Fator de largura baseado em testes com Montserrat/Poppins
+    # Caracteres largos (W, M, O, A, G, U) podem ocupar até 0.85x do tamanho
+    # Usando valor ALTO para garantir que nunca corte
+    if is_caps:
+        char_width_factor = 0.75  # CAPS: caracteres largos
+    else:
+        char_width_factor = 0.60  # Normal: média menor
+    
+    char_width_estimate = font_size * char_width_factor
+    
+    # Calcula máximo de caracteres
+    calculated_max_chars = int(usable_width / char_width_estimate)
+    
+    # Limites por tipo de vídeo - MAIS RESTRITIVOS para vertical
+    if is_vertical:
+        min_chars = 8
+        max_chars = 18  # Shorts/Stories: 2-3 palavras curtas por linha NO MÁXIMO
+    else:
+        min_chars = 20
+        max_chars = 40  # Desktop: frases maiores
+    
+    # Aplica limites
+    calculated_max_chars = max(min_chars, min(calculated_max_chars, max_chars))
+    
+    # Aplica o valor calculado
+    style_config.max_chars_per_line = calculated_max_chars
+    
+    # AJUSTAR max_lines para permitir mais linhas em vídeos verticais
+    # Com max_chars=8-18, textos longos precisam de mais linhas
+    if is_vertical:
+        # Para mobile: permitir até 4 linhas (mais espaço vertical disponível)
+        style_config.max_lines = 4
+    else:
+        # Desktop: manter 2 linhas
+        style_config.max_lines = 2
+    
+    # DEBUG detalhado
+    print(f"📐 CALC LEGENDAS:")
+    print(f"   Resolução: {w}x{h} ({'VERTICAL' if is_vertical else 'HORIZONTAL'})")
+    print(f"   Fonte: {font_size}px, CAPS: {is_caps}")
+    print(f"   Margens: L={margin_l_px}px, R={margin_r_px}px")
+    print(f"   Usable width: {usable_width:.0f}px")
+    print(f"   Max chars: {calculated_max_chars}, Max lines: {style_config.max_lines}")
+
+
+    
     primary = ass_color_bgr_hex(style_config.primary_color)
     secondary = ass_color_bgr_hex(style_config.secondary_color)
     outline_color = ass_color_bgr_hex(style_config.outline_color)
@@ -1381,6 +1598,10 @@ def write_ass_karaoke(
         alpha_hex = f"{style_config.background_alpha:02X}"
         back_color = back_color.replace("&H00", f"&H{alpha_hex}")
 
+    # Margens laterais: usar os mesmos valores calculados acima (margin_l_px, margin_r_px)
+    margin_l_ass = margin_l_px
+    margin_r_ass = margin_r_px
+
     header = f"""[Script Info]
 ScriptType: v4.00+
 PlayResX: {w}
@@ -1390,32 +1611,61 @@ WrapStyle: 2
 
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Default,{style_config.font_name},{style_config.font_size},{primary},{secondary},{outline_color},{back_color},{bold_flag},0,0,0,100,100,{style_config.letter_spacing},0,{border_style},{style_config.outline_size},{style_config.shadow_depth},{style_config.alignment},60,60,{style_config.margin_v},1
+Style: Default,{style_config.font_name},{style_config.font_size},{primary},{secondary},{outline_color},{back_color},{bold_flag},0,0,0,100,100,{style_config.letter_spacing},0,{border_style},{style_config.outline_size},{style_config.shadow_depth},{alignment},{margin_l_ass},{margin_r_ass},{calculated_margin_v},1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 """
     lines = [header]
 
-    for seg in segments:
-        start = ass_time(seg.start)
-        end = ass_time(seg.end)
-        prefix = ""
-        if use_speaker_prefix and seg.speaker:
-            prefix = f"[{seg.speaker}] "
-        
-        # Sempre usa builder CapCut para respeitar CAPS/letter spacing/cor,
-        # mesmo quando a animação é NONE.
-        text = prefix + build_karaoke_text_capcut(seg.words, seg.start, style_config)
+    # ========== MODO SINGLE WORD: Uma palavra por vez ==========
+    if getattr(style_config, 'single_word_mode', False):
+        # Cada palavra é um Dialogue separado, aparecendo sozinha na tela
+        for seg in segments:
+            for word in seg.words:
+                w_start = ass_time(word.start)
+                w_end = ass_time(word.end)
+                
+                # Texto da palavra
+                word_text = word.text.strip()
+                if style_config.all_caps:
+                    word_text = word_text.upper()
+                
+                # Aplicar animação pop se configurada
+                if style_config.animation_type == AnimationType.POP:
+                    intensity = style_config.animation_intensity
+                    scale_max = int(100 + 15 * intensity)
+                    # Pop: cresce e volta rapidamente
+                    word_text = f"{{\\fscx80\\fscy80\\t(0,80,\\fscx{scale_max}\\fscy{scale_max})\\t(80,150,\\fscx100\\fscy100)}}{word_text}"
+                elif style_config.animation_type == AnimationType.BOUNCE:
+                    intensity = style_config.animation_intensity
+                    scale_max = int(100 + 25 * intensity)
+                    word_text = f"{{\\fscx70\\fscy70\\t(0,100,\\fscx{scale_max}\\fscy{scale_max})\\t(100,200,\\fscx100\\fscy100)}}{word_text}"
+                elif style_config.animation_type == AnimationType.SCALE_IN:
+                    word_text = f"{{\\fscx0\\fscy0\\t(0,150,\\fscx100\\fscy100)}}{word_text}"
+                
+                lines.append(f"Dialogue: 0,{w_start},{w_end},Default,,0,0,0,,{word_text}")
+    else:
+        # ========== MODO NORMAL: Múltiplas palavras com karaoke ==========
+        for seg in segments:
+            start = ass_time(seg.start)
+            end = ass_time(seg.end)
+            prefix = ""
+            if use_speaker_prefix and seg.speaker:
+                prefix = f"[{seg.speaker}] "
+            
+            # Sempre usa builder CapCut para respeitar CAPS/letter spacing/cor,
+            # mesmo quando a animação é NONE.
+            text = prefix + build_karaoke_text_capcut(seg.words, seg.start, style_config)
 
-        # Quebra linha para evitar estouro (conta só caracteres visíveis)
-        if style_config.max_chars_per_line:
-            text = wrap_ass_line(text, style_config.max_chars_per_line, style_config.max_lines)
+            # Quebra linha para evitar estouro (conta só caracteres visíveis)
+            if style_config.max_chars_per_line:
+                text = wrap_ass_line(text, style_config.max_chars_per_line, style_config.max_lines)
 
-        if style_config.background_style in [BackgroundStyle.BOX, BackgroundStyle.ROUNDED]:
-            text = add_background_box(text, style_config)
-        
-        lines.append(f"Dialogue: 0,{start},{end},Default,,0,0,0,,{text}")
+            if style_config.background_style in [BackgroundStyle.BOX, BackgroundStyle.ROUNDED]:
+                text = add_background_box(text, style_config)
+            
+            lines.append(f"Dialogue: 0,{start},{end},Default,,0,0,0,,{text}")
 
     out_ass.write_text("\n".join(lines), encoding="utf-8")
 
@@ -1920,9 +2170,14 @@ def main() -> int:
     # Estilo CapCut/Viral
     ap.add_argument("--capcut-style", default=None, choices=list(CapcutPresets.get_preset_names()) + [None], 
                     help="Preset de estilo CapCut/TikTok (viral_karaoke, clean_premium, tutorial_tech, etc). Se não especificado, usa estilo legacy simples.")
-    ap.add_argument("--capcut-font-size", type=int, default=None, help="Override de tamanho da fonte para preset CapCut (padrão: do preset).")
+    ap.add_argument("--capcut-font-size", default=None, 
+                    help="Tamanho da fonte: 'auto' (adapta ao vídeo) ou valor em pixels (38-70). Auto calcula baseado na resolução.")
     ap.add_argument("--capcut-uppercase", choices=["auto", "on", "off"], default="auto",
                     help="Força CAPS (on), mantém caixa original (off) ou usa o preset (auto).")
+    ap.add_argument("--subtitle-position", choices=["bottom", "top", "center", "auto"], default="bottom",
+                    help="Posicionamento vertical da legenda (bottom=padrão, top=topo, center=centro, auto=inteligente). Mobile/Stories: safe zones automáticas.")
+    ap.add_argument("--text-alignment", choices=["left", "center", "right", "justify"], default="center",
+                    help="Alinhamento horizontal do texto (center=padrão, left=esquerda, right=direita, justify=justificado).")
 
     # Estilo legacy (usado se --capcut-style não for especificado)
     ap.add_argument("--font", default="Arial")
@@ -1984,21 +2239,70 @@ def main() -> int:
         else:
             print(f"⚠️  Estilo '{args.capcut_style}' não encontrado, usando legacy")
 
-    # Overrides de CapCut (tamanho/caps) e adaptação para resolução
+    # Overrides de CapCut (tamanho/caps/posição/alinhamento) e adaptação para resolução
     if style_config:
         base_font_size = style_config.font_size
         base_max_chars = style_config.max_chars_per_line
+        
+        # Tamanho da fonte: auto ou valor específico
         if args.capcut_font_size:
-            style_config.font_size = args.capcut_font_size
+            if args.capcut_font_size.lower() == "auto":
+                # Calcula tamanho ideal baseado na resolução
+                # Base: 52px para 1080p, escala proporcionalmente
+                w, h = res if res else (1920, 1080)
+                is_vertical = h > w
+                if is_vertical:
+                    # Mobile vertical: fonte menor para caber mais texto
+                    # 1080x1920 → ~46px, 720x1280 → ~38px
+                    auto_size = int(46 * (w / 1080.0))
+                    auto_size = max(32, min(auto_size, 56))
+                else:
+                    # Desktop horizontal: fonte maior
+                    # 1920x1080 → ~52px, 1280x720 → ~44px
+                    auto_size = int(52 * (w / 1920.0))
+                    auto_size = max(38, min(auto_size, 70))
+                style_config.font_size = auto_size
+                print(f"📐 Tamanho de fonte automático: {auto_size}px para {w}x{h}")
+            elif args.capcut_font_size.isdigit():
+                style_config.font_size = int(args.capcut_font_size)
+        
         if args.capcut_uppercase == "on":
             style_config.all_caps = True
         elif args.capcut_uppercase == "off":
             style_config.all_caps = False
-        # ajustar max_chars_per_line conforme largura (PlayResX) e font override
-        if base_max_chars and res:
-            scale_w = max(0.5, res[0] / 1920.0)
-            scale_font = base_font_size / style_config.font_size if style_config.font_size else 1.0
-            style_config.max_chars_per_line = max(10, int(round(base_max_chars * scale_w * scale_font)))
+        
+        # Posicionamento vertical (mobile + desktop)
+        position_map = {
+            "bottom": SubtitlePosition.BOTTOM,
+            "top": SubtitlePosition.TOP,
+            "center": SubtitlePosition.CENTER,
+            "auto": SubtitlePosition.AUTO,
+        }
+        if args.subtitle_position in position_map:
+            style_config.subtitle_position = position_map[args.subtitle_position]
+        
+        # Alinhamento horizontal do texto
+        # ASS alignment: 1=left-bottom, 2=center-bottom, 3=right-bottom
+        #                5=center-middle, 8=center-top, etc.
+        alignment_map = {
+            "left": {"bottom": 1, "center": 4, "top": 7},
+            "center": {"bottom": 2, "center": 5, "top": 8},
+            "right": {"bottom": 3, "center": 6, "top": 9},
+            "justify": {"bottom": 2, "center": 5, "top": 8},  # ASS não suporta justify, usa center
+        }
+        text_align = args.text_alignment if args.text_alignment else "center"
+        position_key = args.subtitle_position if args.subtitle_position != "auto" else "bottom"
+        if position_key == "center":
+            position_key = "center"
+        elif position_key == "top":
+            position_key = "top"
+        else:
+            position_key = "bottom"
+        style_config.alignment = alignment_map.get(text_align, {}).get(position_key, 2)
+        
+        # NOTA: max_chars_per_line é calculado dinamicamente em write_ass_karaoke()
+        # baseado na resolução REAL do vídeo e tamanho da fonte.
+        # NÃO sobrescrever aqui para permitir ajuste correto por vídeo.
 
     def karaoke_engine_effective() -> str:
         eng = args.karaoke_engine
@@ -2112,6 +2416,15 @@ def main() -> int:
         out_vid = output_dir / f"{stem}.karaoke.mp4"
         out_wx_json = output_dir / f"{stem}.whisperx.json"
 
+        # Detectar resolução REAL do vídeo (não usar args.res padrão)
+        actual_res = detect_video_resolution(args.ffmpeg, media)
+        if actual_res:
+            video_res = actual_res
+            print(f"📐 Resolução detectada: {video_res[0]}x{video_res[1]}")
+        else:
+            video_res = res  # Fallback para args.res
+            print(f"⚠️ Não foi possível detectar resolução, usando: {video_res[0]}x{video_res[1]}")
+
         engine = args.karaoke_engine
         if engine == "auto":
             engine = "whisperx" if (args.whisperx_cli or args.whisperx_docker_image) else "approx"
@@ -2172,7 +2485,7 @@ def main() -> int:
             out_ass,
             font=args.font,
             font_size=args.font_size,
-            res=res,
+            res=video_res,  # Usa resolução REAL do vídeo
             margin_v=args.margin_v,
             outline=args.outline,
             shadow=args.shadow,
@@ -2188,7 +2501,7 @@ def main() -> int:
             ass_path=out_ass,
             output_video=out_vid,
             audio_only_bg=args.audio_bg,
-            audio_only_res=res,
+            audio_only_res=video_res,  # Usa resolução REAL do vídeo
             audio_only_fps=args.audio_fps,
             ffmpeg_crf=args.ffmpeg_crf,
             ffmpeg_preset=args.ffmpeg_preset,
