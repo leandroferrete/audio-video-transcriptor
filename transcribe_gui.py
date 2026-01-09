@@ -263,6 +263,50 @@ class App:
         ttk.Checkbutton(flags2, text="Speaker prefix no ASS", variable=self.var_speaker_prefix).pack(side="left", padx=(0, 6))
         row += 1
 
+        # Estilo CapCut/Viral
+        ttk.Label(right, text="Estilo de Legenda (CapCut/TikTok/Viral)", font=("Segoe UI", 10, "bold")).grid(row=row, column=0, columnspan=4, sticky="w", pady=(8, 4)); row += 1
+        
+        self.var_capcut_style = tk.StringVar(value="viral_karaoke")
+        self.var_capcut_case = tk.StringVar(value="auto")  # auto/on/off
+        self.var_capcut_font_size = tk.StringVar(value="")  # vazio = padrão do preset
+        capcut_styles = [
+            ("Padrão Viral (karaokê) - Amarelo, Pop, ALL CAPS", "viral_karaoke"),
+            ("Viral Flat (CAPS, sem animação) - Amarelo sólido", "viral_flat"),
+            ("Clean Premium (podcast) - Minimalista, caixa preta", "clean_premium"),
+            ("Tutorial Tech - Ciano, Oswald, Scale-in", "tutorial_tech"),
+            ("Storytime/Fofoca - Poppins, caixa branca, Shake", "storytime_fofoca"),
+            ("Motivacional - Dourado, Glow, gradiente", "motivacional"),
+            ("Terror/True Crime - Vermelho, condensado, glitch", "terror_true_crime"),
+            ("Desativado (usar estilo simples/legacy)", "none"),
+        ]
+        
+        style_label = ttk.Label(right, text="Preset de Estilo:")
+        style_label.grid(row=row, column=0, sticky="w")
+        style_combo = ttk.Combobox(right, textvariable=self.var_capcut_style, values=[s[1] for s in capcut_styles], state="readonly", width=22)
+        style_combo.grid(row=row, column=1, sticky="ew", columnspan=2, padx=(6, 0))
+        style_help_btn = ttk.Button(right, text="?", width=3, command=self.show_style_help)
+        style_help_btn.grid(row=row, column=3, sticky="w", padx=(4, 0))
+        row += 1
+
+        # Controle de caixa (CAPS) e tamanho
+        ttk.Label(right, text="Caixa (auto/CAPS/original):").grid(row=row, column=0, sticky="w")
+        case_combo = ttk.Combobox(right, textvariable=self.var_capcut_case, state="readonly",
+                                  values=["auto", "on", "off"], width=22)
+        case_combo.grid(row=row, column=1, sticky="ew", padx=(6, 0))
+        case_combo.bind("<<ComboboxSelected>>", lambda e: self._normalize_case_var())
+        ttk.Label(right, text="Fonte (vazio = padrão):").grid(row=row, column=2, sticky="e", padx=(6, 4))
+        ttk.Entry(right, textvariable=self.var_capcut_font_size, width=10).grid(row=row, column=3, sticky="w")
+        row += 1
+        self._normalize_case_var()
+        
+        # Descrição do estilo selecionado
+        self.style_desc_label = ttk.Label(right, text=self.get_style_description("viral_karaoke"), foreground="#444", wraplength=450, justify="left")
+        self.style_desc_label.grid(row=row, column=0, columnspan=4, sticky="w", pady=(2, 4))
+        row += 1
+        
+        # Atualizar descrição quando mudar seleção
+        style_combo.bind("<<ComboboxSelected>>", lambda e: self.update_style_description())
+
         # Log
         log_box = ttk.LabelFrame(self.root, text="Log", padding=8)
         log_box.grid(row=3, column=0, sticky="nsew", padx=10, pady=(0, 10))
@@ -285,7 +329,8 @@ class App:
             "- Karaoke engine: approx (rápido, sem WhisperX) ou WhisperX (timing por palavra). Diarize só funciona com WhisperX + token.\n"
             "- WhisperX diarize: precisa token HF em HUGGINGFACE_HUB_TOKEN (ou o env que você setar) e caminho do whisperx-cli (ou imagem Docker).\n"
             "- Watch: monitora a pasta e processa novos arquivos; Keep WAV salva o WAV intermediário.\n"
-            "- Glossário/Redact: substitui termos ou remove PII (email/tel/cpf/cnpj)."
+            "- Glossário/Redact: substitui termos ou remove PII (email/tel/cpf/cnpj).\n"
+            "- Caps/tamanho (CapCut): escolha auto/on/off para CAPSLOCK; fonte vazia usa o tamanho ideal do preset e adapta à largura."
         )
         ttk.Label(help_box, text=help_text, wraplength=1000, justify="left").pack(anchor="w")
 
@@ -322,6 +367,96 @@ class App:
         p = filedialog.askdirectory()
         if p:
             self.var_cache_dir.set(p)
+
+    # ------------- estilos CapCut -------------
+    def get_style_description(self, style_name: str) -> str:
+        """Retorna descrição do estilo selecionado."""
+        descriptions = {
+            "viral_karaoke": "🔥 VIRAL: Branco→Amarelo, POP bounce, ALL CAPS, stroke preto. O mais usado em Reels/TikTok/Shorts.",
+            "viral_flat": "🟡 VIRAL FLAT: Amarelo sólido, sem animação, Montserrat ALL CAPS, stroke preto discreto.",
+            "clean_premium": "✨ PREMIUM: Minimalista, caixa preta arredondada, Inter, ideal para podcasts/entrevistas.",
+            "tutorial_tech": "💻 TECH: Oswald condensada, ciano destaque, scale-in, perfeito para tutoriais/explicações.",
+            "storytime_fofoca": "🗣️ STORYTIME: Poppins bold, caixa branca, shake em palavras-chave, ideal para histórias/fofocas.",
+            "motivacional": "💪 MOTIVACIONAL: Montserrat, dourado com glow, gradiente laranja, inspirador.",
+            "terror_true_crime": "🔪 TERROR: Oswald, vermelho sangue, shake/glitch, caixa preta, suspense/true crime.",
+            "none": "❌ Desativado: Usa estilo legacy simples (sem animações avançadas)."
+        }
+        return descriptions.get(style_name, "Estilo personalizado")
+    
+    def update_style_description(self):
+        """Atualiza a descrição quando mudar estilo."""
+        style = self.var_capcut_style.get()
+        desc = self.get_style_description(style)
+        self.style_desc_label.config(text=desc)
+    
+    def show_style_help(self):
+        """Mostra janela com explicação detalhada dos estilos."""
+        help_text = """ESTILOS DE LEGENDA CAPCUT/TIKTOK/VIRAL
+
+🔥 Padrão Viral (karaokê):
+- O mais usado em Reels/TikTok/Shorts
+- Branco → Amarelo quando ativo
+- Animação POP/Bounce micro
+- ALL CAPS, stroke preto grosso
+- Montserrat Bold
+
+🟡 Viral Flat (sem animação):
+- Mesmo visual do viral, sem animação
+- Amarelo sólido no destaque
+- ALL CAPS, Montserrat
+- Stroke preto discreto e caixa leve
+
+✨ Clean Premium:
+- Minimalista profissional
+- Caixa preta arredondada translúcida
+- Fonte Inter, sem ALL CAPS
+- Ideal para podcasts, entrevistas
+- Fade suave
+
+💻 Tutorial Tech:
+- Oswald condensada
+- Destaque ciano (palavras-chave)
+- Scale-in (cresce de pequeno)
+- Perfeito para tutoriais/tech
+
+🗣️ Storytime/Fofoca:
+- Poppins bold arredondada
+- Caixa BRANCA com texto preto
+- Shake em palavras de ênfase
+- Estilo "fofoca viral"
+
+💪 Motivacional:
+- Dourado com glow/brilho
+- Gradiente (dourado→laranja)
+- Montserrat, ALL CAPS
+- Scale + pulse
+- Inspirador/energia
+
+🔪 Terror/True Crime:
+- Vermelho sangue (#FF0000)
+- Shake/glitch em palavras-chave
+- Oswald condensada
+- Caixa preta, suspense
+
+Cada estilo inclui:
+- Fonte customizada
+- Cores específicas
+- Animações (pop, bounce, scale, shake, glow)
+- Timing palavra-por-palavra
+- ALL CAPS ou Title Case
+- Letter spacing ajustado
+"""
+        messagebox.showinfo("Estilos CapCut/TikTok", help_text)
+
+    def _normalize_case_var(self):
+        """Normaliza valor do combo de caixa (auto/on/off)."""
+        v = (self.var_capcut_case.get() or "").lower()
+        if v.startswith("on"):
+            self.var_capcut_case.set("on")
+        elif v.startswith("off"):
+            self.var_capcut_case.set("off")
+        else:
+            self.var_capcut_case.set("auto")
 
     # ------------- presets -------------
     def preset_text_fast(self):
@@ -458,6 +593,17 @@ class App:
                 cmd.append("--diarize")
             if self.var_speaker_prefix.get():
                 cmd.append("--speaker-prefix")
+            
+            # Estilo CapCut
+            style = self.var_capcut_style.get()
+            if style and style != "none":
+                cmd += ["--capcut-style", style]
+                case_val = (self.var_capcut_case.get() or "").lower()
+                if case_val in ("on", "off"):
+                    cmd += ["--capcut-uppercase", case_val]
+                fs = self.var_capcut_font_size.get().strip()
+                if fs.isdigit():
+                    cmd += ["--capcut-font-size", fs]
         # else: não passa --karaoke (gera só textos)
 
         return cmd

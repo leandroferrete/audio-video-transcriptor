@@ -9,10 +9,11 @@ import subprocess
 import sys
 import tempfile
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
+from enum import Enum
 
 from tqdm import tqdm
 
@@ -22,6 +23,329 @@ try:
     sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 except Exception:
     pass
+
+
+# ===========================
+# ESTILOS CAPCUT / VIRAL
+# ===========================
+
+class AnimationType(Enum):
+    """Tipos de animação para karaoke estilo CapCut"""
+    NONE = "none"                    # Sem animação
+    POP = "pop"                      # Bounce/pop micro na palavra ativa
+    BOUNCE = "bounce"                # Bounce mais pronunciado
+    SCALE_IN = "scale_in"            # Cresce de pequeno para tamanho normal
+    SHAKE = "shake"                  # Tremor horizontal (palavras-chave)
+    GLOW = "glow"                    # Brilho/glow que aumenta
+    COLOR_SWITCH = "color_switch"    # Troca de cor palavra por palavra
+    TYPEWRITER = "typewriter"        # Efeito de digitação (não word-by-word)
+
+
+class BackgroundStyle(Enum):
+    """Estilo de fundo/caixa atrás do texto"""
+    NONE = "none"                    # Sem caixa
+    BOX = "box"                      # Retângulo sólido
+    ROUNDED = "rounded"              # Retângulo arredondado (pill)
+    GLASS = "glass"                  # Caixa translúcida (efeito vidro)
+    HIGHLIGHT = "highlight"          # Marca-texto atrás da palavra
+
+
+@dataclass
+class CapcutStyleConfig:
+    """Configuração completa de estilo CapCut para karaoke"""
+    
+    # Fonte
+    font_name: str = "Montserrat"
+    font_size: int = 52
+    font_bold: bool = True
+    all_caps: bool = True
+    letter_spacing: int = 0  # em pixels (\fsp)
+    
+    # Cores (RGB hex: "FFFFFF")
+    primary_color: str = "FFFFFF"      # Cor da palavra ativa
+    secondary_color: str = "FFFFFF"    # Cor antes de ativar
+    outline_color: str = "000000"      # Cor da borda
+    shadow_color: str = "000000"       # Cor da sombra
+    
+    # Efeitos visuais
+    outline_size: int = 3              # Tamanho da borda (\bord)
+    shadow_depth: int = 2              # Profundidade da sombra (\shad)
+    blur_strength: float = 0.0         # Blur gaussiano (\blur)
+    
+    # Background/caixa
+    background_style: BackgroundStyle = BackgroundStyle.NONE
+    background_color: str = "000000"   # Cor da caixa
+    background_alpha: int = 180        # Transparência da caixa (0=opaco, 255=invisível)
+    background_padding: int = 20       # Padding da caixa
+    
+    # Animação
+    animation_type: AnimationType = AnimationType.COLOR_SWITCH
+    animation_intensity: float = 1.0   # Multiplicador de intensidade (0.5 = sutil, 2.0 = exagerado)
+    
+    # Highlight palavra-por-palavra
+    highlight_color: str = "FFFF00"    # Amarelo para destaque
+    use_gradient: bool = False          # Usar gradiente (simulado com alpha)
+    gradient_color: str = "FF00FF"     # Segunda cor do gradiente
+    
+    # Posicionamento
+    margin_v: int = 50                 # Margem vertical (pixels da borda inferior)
+    alignment: int = 2                 # 1-9 (numpad), 2 = bottom center
+    max_chars_per_line: int = 28       # Limite de caracteres por linha (para não estourar a tela)
+    max_lines: int = 2                 # Limite de linhas (quebra com \\N)
+    
+    def to_dict(self) -> dict:
+        """Serializa para JSON/dict"""
+        return {
+            "font_name": self.font_name,
+            "font_size": self.font_size,
+            "font_bold": self.font_bold,
+            "all_caps": self.all_caps,
+            "letter_spacing": self.letter_spacing,
+            "primary_color": self.primary_color,
+            "secondary_color": self.secondary_color,
+            "outline_color": self.outline_color,
+            "shadow_color": self.shadow_color,
+            "outline_size": self.outline_size,
+            "shadow_depth": self.shadow_depth,
+            "blur_strength": self.blur_strength,
+            "background_style": self.background_style.value,
+            "background_color": self.background_color,
+            "background_alpha": self.background_alpha,
+            "background_padding": self.background_padding,
+            "animation_type": self.animation_type.value,
+            "animation_intensity": self.animation_intensity,
+            "highlight_color": self.highlight_color,
+            "use_gradient": self.use_gradient,
+            "gradient_color": self.gradient_color,
+            "margin_v": self.margin_v,
+            "alignment": self.alignment,
+            "max_chars_per_line": self.max_chars_per_line,
+            "max_lines": self.max_lines,
+        }
+    
+    @staticmethod
+    def from_dict(data: dict) -> 'CapcutStyleConfig':
+        """Deserializa de JSON/dict"""
+        return CapcutStyleConfig(
+            font_name=data.get("font_name", "Montserrat"),
+            font_size=data.get("font_size", 52),
+            font_bold=data.get("font_bold", True),
+            all_caps=data.get("all_caps", True),
+            letter_spacing=data.get("letter_spacing", 0),
+            primary_color=data.get("primary_color", "FFFFFF"),
+            secondary_color=data.get("secondary_color", "FFFFFF"),
+            outline_color=data.get("outline_color", "000000"),
+            shadow_color=data.get("shadow_color", "000000"),
+            outline_size=data.get("outline_size", 3),
+            shadow_depth=data.get("shadow_depth", 2),
+            blur_strength=data.get("blur_strength", 0.0),
+            background_style=BackgroundStyle(data.get("background_style", "none")),
+            background_color=data.get("background_color", "000000"),
+            background_alpha=data.get("background_alpha", 180),
+            background_padding=data.get("background_padding", 20),
+            animation_type=AnimationType(data.get("animation_type", "color_switch")),
+            animation_intensity=data.get("animation_intensity", 1.0),
+            highlight_color=data.get("highlight_color", "FFFF00"),
+            use_gradient=data.get("use_gradient", False),
+            gradient_color=data.get("gradient_color", "FF00FF"),
+            margin_v=data.get("margin_v", 50),
+            alignment=data.get("alignment", 2),
+            max_chars_per_line=data.get("max_chars_per_line", 28),
+            max_lines=data.get("max_lines", 2),
+        )
+
+
+# PRESETS VIRAIS (baseado no estudo fonts.txt)
+
+class CapcutPresets:
+    """Presets de estilo prontos para usar - baseados nos estilos virais"""
+    
+    @staticmethod
+    def viral_karaoke() -> CapcutStyleConfig:
+        """1) Padrão viral (karaokê) - O mais usado em Reels/TikTok/Shorts"""
+        return CapcutStyleConfig(
+            font_name="Montserrat",
+            font_size=46,
+            font_bold=True,
+            all_caps=True,
+            letter_spacing=1,
+            primary_color="FFE600",      # Dourado claro (ativo)
+            secondary_color="F5F5F5",    # Off-white (inativo)
+            outline_color="0B0B0B",
+            outline_size=3,
+            shadow_depth=1,
+            blur_strength=0.6,
+            background_style=BackgroundStyle.ROUNDED,
+            background_color="000000",
+            background_alpha=160,
+            background_padding=18,
+            animation_type=AnimationType.POP,
+            animation_intensity=0.9,
+            highlight_color="00FFC2",    # Verde-menta sutil
+            margin_v=80,
+            max_chars_per_line=34,  # ~1 linha 5-9 palavras, 2 linhas 10-14
+            max_lines=2,
+        )
+    
+    @staticmethod
+    def viral_flat() -> CapcutStyleConfig:
+        """1b) Viral flat - mesma base do viral, sem animação, highlight amarelo suave"""
+        return CapcutStyleConfig(
+            font_name="Montserrat",
+            font_size=46,               # mantém proporção do viral; seguro em 1080p
+            font_bold=True,
+            all_caps=True,
+            letter_spacing=1,
+            primary_color="FFE600",     # Amarelo ativo
+            secondary_color="F5F5F5",   # Off-white inativo
+            outline_color="0B0B0B",
+            outline_size=3,
+            shadow_depth=1,
+            blur_strength=0.4,
+            background_style=BackgroundStyle.ROUNDED,
+            background_color="000000",
+            background_alpha=160,
+            background_padding=18,
+            animation_type=AnimationType.NONE,  # sem animação
+            animation_intensity=0.0,
+            highlight_color="FFE600",
+            margin_v=80,
+            max_chars_per_line=34,
+            max_lines=2,
+        )
+    
+    @staticmethod
+    def clean_premium() -> CapcutStyleConfig:
+        """2) Clean premium (podcast/entrevista) - Minimalista profissional"""
+        return CapcutStyleConfig(
+            font_name="Inter",
+            font_size=40,
+            font_bold=False,
+            all_caps=False,
+            primary_color="FFFFFF",
+            secondary_color="B5C0CB",
+            outline_color="000000",
+            outline_size=0,
+            shadow_depth=0,
+            background_style=BackgroundStyle.ROUNDED,
+            background_color="000000",
+            background_alpha=190,
+            background_padding=22,
+            animation_type=AnimationType.COLOR_SWITCH,
+            animation_intensity=0.6,
+            margin_v=90,
+            max_chars_per_line=36,
+            max_lines=2,
+        )
+    
+    @staticmethod
+    def tutorial_tech() -> CapcutStyleConfig:
+        """3) Tutorial tech - Fonte condensada com destaque ciano"""
+        return CapcutStyleConfig(
+            font_name="Oswald",
+            font_size=44,
+            font_bold=True,
+            all_caps=True,
+            letter_spacing=1,
+            primary_color="00E0FF",      # Ciano premium
+            secondary_color="EFF7FF",
+            outline_color="000000",
+            outline_size=2,
+            shadow_depth=1,
+            animation_type=AnimationType.SCALE_IN,
+            animation_intensity=1.2,
+            margin_v=78,
+            max_chars_per_line=36,
+            max_lines=2,
+        )
+    
+    @staticmethod
+    def storytime_fofoca() -> CapcutStyleConfig:
+        """4) Storytime/fofoca - Bold arredondado com shake"""
+        return CapcutStyleConfig(
+            font_name="Poppins",
+            font_size=44,
+            font_bold=True,
+            all_caps=False,
+            primary_color="111111",
+            secondary_color="2E2E2E",
+            outline_color="FFFFFF",
+            outline_size=3,
+            background_style=BackgroundStyle.BOX,
+            background_color="FFFFFF",
+            background_alpha=230,
+            background_padding=18,
+            animation_type=AnimationType.SHAKE,
+            animation_intensity=0.6,
+            margin_v=76,
+            max_chars_per_line=32,
+            max_lines=2,
+        )
+    
+    @staticmethod
+    def motivacional() -> CapcutStyleConfig:
+        """5) Motivacional - Glow dourado com scale"""
+        return CapcutStyleConfig(
+            font_name="Montserrat",
+            font_size=48,
+            font_bold=True,
+            all_caps=True,
+            letter_spacing=2,
+            primary_color="FFD166",      # Dourado quente
+            secondary_color="FFFFFF",
+            outline_color="000000",
+            outline_size=2,
+            shadow_depth=2,
+            blur_strength=0.6,           # Glow leve
+            animation_type=AnimationType.GLOW,
+            animation_intensity=1.1,
+            use_gradient=True,
+            gradient_color="FFA500",     # Laranja
+            margin_v=82,
+            max_chars_per_line=36,
+            max_lines=2,
+        )
+    
+    @staticmethod
+    def terror_true_crime() -> CapcutStyleConfig:
+        """6) Terror/true crime - Condensado com glitch vermelho"""
+        return CapcutStyleConfig(
+            font_name="Oswald",
+            font_size=44,
+            font_bold=True,
+            all_caps=True,
+            letter_spacing=3,
+            primary_color="E60000",      # Vermelho sangue mais escuro
+            secondary_color="FFFFFF",
+            outline_color="000000",
+            outline_size=2,
+            background_style=BackgroundStyle.BOX,
+            background_color="000000",
+            background_alpha=200,
+            animation_type=AnimationType.SHAKE,  # Simula glitch
+            animation_intensity=1.3,
+            margin_v=72,
+            max_chars_per_line=32,
+            max_lines=2,
+        )
+    
+    @staticmethod
+    def get_all_presets() -> Dict[str, CapcutStyleConfig]:
+        """Retorna todos os presets disponíveis"""
+        return {
+            "viral_karaoke": CapcutPresets.viral_karaoke(),
+            "viral_flat": CapcutPresets.viral_flat(),
+            "clean_premium": CapcutPresets.clean_premium(),
+            "tutorial_tech": CapcutPresets.tutorial_tech(),
+            "storytime_fofoca": CapcutPresets.storytime_fofoca(),
+            "motivacional": CapcutPresets.motivacional(),
+            "terror_true_crime": CapcutPresets.terror_true_crime(),
+        }
+    
+    @staticmethod
+    def get_preset_names() -> List[str]:
+        """Lista nomes dos presets"""
+        return list(CapcutPresets.get_all_presets().keys())
 
 
 # Suporta VÍDEO e ÁUDIO
@@ -679,35 +1003,219 @@ def build_karaoke_text(words: List[Word], min_cs: int = 1, segment_start: float 
     return "".join(parts).rstrip()
 
 
+def build_karaoke_text_capcut(
+    words: List[Word], 
+    segment_start: float, 
+    style_config: CapcutStyleConfig,
+    min_cs: int = 1
+) -> str:
+    """
+    Constrói texto karaoke ASS com animações estilo CapCut/TikTok/Viral.
+    
+    Suporta:
+    - Animações \\t (pop, bounce, scale, shake, glow)
+    - Mudança de cor palavra-por-palavra
+    - Letter spacing customizado (\\fsp)
+    - ALL CAPS automático
+    
+    Args:
+        words: Lista de palavras com timestamps
+        segment_start: Início do segmento em segundos
+        style_config: Configuração de estilo CapCut
+        min_cs: Duração mínima em centissegundos
+    
+    Returns:
+        String ASS formatada com efeitos
+    """
+    if not words:
+        return ""
+    
+    parts: List[str] = []
+    
+    # Cor de destaque para palavra ativa (primary)
+    primary_rgb = style_config.primary_color
+    primary_ass = ass_color_bgr_hex(primary_rgb)
+    
+    # Cor secundária (antes de ativar)
+    secondary_ass = ass_color_bgr_hex(style_config.secondary_color)
+    
+    # Intensidade das animações
+    intensity = style_config.animation_intensity
+    
+    for i, w in enumerate(words):
+        # Calcular delay (tempo até destacar esta palavra)
+        if i == 0:
+            delay_seconds = max(0.0, w.start - segment_start)
+        else:
+            prev_word = words[i - 1]
+            delay_seconds = max(0.0, w.start - prev_word.start)
+        
+        cs = max(min_cs if i > 0 else 0, int(round(delay_seconds * 100)))
+        
+        # Duração da palavra (para animações)
+        word_duration = max(0.1, w.end - w.start)
+        word_duration_ms = int(word_duration * 1000)
+        
+        # Processar texto
+        text = w.text.replace("{", "").replace("}", "")
+        if style_config.all_caps:
+            text = text.upper()
+        
+        # Montar override block com animação
+        override_tags = []
+        
+        # Letter spacing (se configurado)
+        if style_config.letter_spacing != 0:
+            override_tags.append(f"\\fsp{style_config.letter_spacing}")
+        
+        # Tag de karaoke básica
+        override_tags.append(f"\\k{cs}")
+        
+        # ANIMAÇÕES ESTILO CAPCUT
+        if style_config.animation_type == AnimationType.POP:
+            # Bounce/Pop: Escala 100% → 110% → 100% rapidamente
+            scale_max = int(100 + 10 * intensity)
+            anim_dur = min(150, word_duration_ms // 2)  # Animação rápida
+            override_tags.append(f"\\t(0,{anim_dur},\\fscx{scale_max}\\fscy{scale_max})")
+            override_tags.append(f"\\t({anim_dur},{anim_dur*2},\\fscx100\\fscy100)")
+        
+        elif style_config.animation_type == AnimationType.BOUNCE:
+            # Bounce mais pronunciado
+            scale_max = int(100 + 20 * intensity)
+            anim_dur = min(200, word_duration_ms // 2)
+            override_tags.append(f"\\t(0,{anim_dur},\\fscx{scale_max}\\fscy{scale_max})")
+            override_tags.append(f"\\t({anim_dur},{anim_dur*2},\\fscx100\\fscy100)")
+        
+        elif style_config.animation_type == AnimationType.SCALE_IN:
+            # Cresce de 0% → 100%
+            scale_start = max(0, int(100 - 80 * intensity))
+            anim_dur = min(300, word_duration_ms)
+            override_tags.insert(0, f"\\fscx{scale_start}\\fscy{scale_start}")  # Estado inicial
+            override_tags.append(f"\\t(0,{anim_dur},\\fscx100\\fscy100)")
+        
+        elif style_config.animation_type == AnimationType.SHAKE:
+            # Tremor horizontal (simula glitch)
+            # ASS não tem shake nativo, simulamos com múltiplas transformações de posição
+            # Alternativa: usar \\fax (shearing) para efeito de "vibração"
+            shear = 0.1 * intensity
+            anim_dur = min(100, word_duration_ms // 3)
+            override_tags.append(f"\\t(0,{anim_dur},\\fax{shear})")
+            override_tags.append(f"\\t({anim_dur},{anim_dur*2},\\fax{-shear})")
+            override_tags.append(f"\\t({anim_dur*2},{anim_dur*3},\\fax0)")
+        
+        elif style_config.animation_type == AnimationType.GLOW:
+            # Aumenta blur gradualmente (simula glow)
+            blur_max = 2.0 * intensity
+            anim_dur = min(250, word_duration_ms)
+            override_tags.append(f"\\t(0,{anim_dur},\\blur{blur_max})")
+            override_tags.append(f"\\t({anim_dur},{word_duration_ms},\\blur0)")
+        
+        # Montar string final
+        override_block = "{" + "".join(override_tags) + "}"
+        parts.append(override_block + text + " ")
+    
+    return "".join(parts).rstrip()
+
+
+def wrap_ass_line(text: str, max_chars: int, max_lines: int = 0) -> str:
+    r"""
+    Insere quebras de linha (\\N) em texto ASS respeitando limite de caracteres visíveis.
+    Ignora tags {\\...} na contagem para evitar estouro na tela. Se max_lines > 0,
+    limita o número de linhas (linhas excedentes são agregadas na última).
+    """
+    if max_chars <= 0:
+        return text
+    tokens = text.split(" ")
+    lines: List[str] = [""]
+    visible_len: List[int] = [0]
+
+    def append_token(idx: int, tok: str):
+        if lines[idx]:
+            lines[idx] += " " + tok
+        else:
+            lines[idx] = tok
+        visible = re.sub(r"\{[^}]*\}", "", tok)
+        visible_len[idx] += len(visible) + (1 if visible_len[idx] > 0 else 0)
+
+    for tok in tokens:
+        if tok == "":
+            continue
+        visible_tok = re.sub(r"\{[^}]*\}", "", tok)
+        wlen = len(visible_tok)
+        current = len(lines) - 1
+        projected = visible_len[current] + (1 if visible_len[current] > 0 else 0) + wlen
+        if visible_len[current] > 0 and projected > max_chars:
+            if max_lines and len(lines) >= max_lines:
+                append_token(current, tok)  # força na última linha
+            else:
+                lines.append(tok)
+                visible_len.append(wlen)
+        else:
+            append_token(current, tok)
+
+    return "\\N".join(lines)
+
+
+def add_background_box(text: str, style_config: CapcutStyleConfig) -> str:
+    """Adiciona background box atrás do texto (simplificado)."""
+    return text
+
+
 def write_ass_karaoke(
     segments: List[KaraokeSegment],
     out_ass: Path,
     *,
-    font: str,
-    font_size: int,
-    res: Tuple[int, int],
-    margin_v: int,
-    outline: int,
-    shadow: int,
-    highlight_rgb: str,
-    base_rgb: str,
-    use_speaker_prefix: bool,
+    font: str = None,
+    font_size: int = None,
+    res: Tuple[int, int] = None,
+    margin_v: int = None,
+    outline: int = None,
+    shadow: int = None,
+    highlight_rgb: str = None,
+    base_rgb: str = None,
+    use_speaker_prefix: bool = False,
+    style_config: Optional[CapcutStyleConfig] = None,
 ) -> None:
-    w, h = res
-    primary = ass_color_bgr_hex(highlight_rgb)   # destacado
-    secondary = ass_color_bgr_hex(base_rgb)      # “apagado”
-    outline_color = "&H00000000"                 # preto
+    """Escreve arquivo ASS com karaoke estilo CapCut."""
+    if style_config is None:
+        style_config = CapcutStyleConfig(
+            font_name=font or "Arial",
+            font_size=font_size or 48,
+            primary_color=highlight_rgb or "FFFF00",
+            secondary_color=base_rgb or "FFFFFF",
+            outline_size=outline or 3,
+            shadow_depth=shadow or 2,
+            margin_v=margin_v or 50,
+            animation_type=AnimationType.COLOR_SWITCH,
+        )
+    
+    w, h = res if res else (1920, 1080)
+    
+    primary = ass_color_bgr_hex(style_config.primary_color)
+    secondary = ass_color_bgr_hex(style_config.secondary_color)
+    outline_color = ass_color_bgr_hex(style_config.outline_color)
+    shadow_color = ass_color_bgr_hex(style_config.shadow_color)
+    
+    bold_flag = "-1" if style_config.font_bold else "0"
+    border_style = 1
     back_color = "&H00000000"
+    
+    if style_config.background_style != BackgroundStyle.NONE:
+        bg_color_rgb = style_config.background_color
+        back_color = ass_color_bgr_hex(bg_color_rgb)
+        alpha_hex = f"{style_config.background_alpha:02X}"
+        back_color = back_color.replace("&H00", f"&H{alpha_hex}")
 
     header = f"""[Script Info]
 ScriptType: v4.00+
 PlayResX: {w}
 PlayResY: {h}
 ScaledBorderAndShadow: yes
+WrapStyle: 2
 
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Default,{font},{font_size},{primary},{secondary},{outline_color},{back_color},0,0,0,0,100,100,0,0,1,{outline},{shadow},2,60,60,{margin_v},1
+Style: Default,{style_config.font_name},{style_config.font_size},{primary},{secondary},{outline_color},{back_color},{bold_flag},0,0,0,100,100,{style_config.letter_spacing},0,{border_style},{style_config.outline_size},{style_config.shadow_depth},{style_config.alignment},60,60,{style_config.margin_v},1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
@@ -720,7 +1228,18 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         prefix = ""
         if use_speaker_prefix and seg.speaker:
             prefix = f"[{seg.speaker}] "
-        text = prefix + build_karaoke_text(seg.words, segment_start=seg.start)
+        
+        # Sempre usa builder CapCut para respeitar CAPS/letter spacing/cor,
+        # mesmo quando a animação é NONE.
+        text = prefix + build_karaoke_text_capcut(seg.words, seg.start, style_config)
+
+        # Quebra linha para evitar estouro (conta só caracteres visíveis)
+        if style_config.max_chars_per_line:
+            text = wrap_ass_line(text, style_config.max_chars_per_line, style_config.max_lines)
+
+        if style_config.background_style in [BackgroundStyle.BOX, BackgroundStyle.ROUNDED]:
+            text = add_background_box(text, style_config)
+        
         lines.append(f"Dialogue: 0,{start},{end},Default,,0,0,0,,{text}")
 
     out_ass.write_text("\n".join(lines), encoding="utf-8")
@@ -1223,6 +1742,14 @@ def main() -> int:
     ap.add_argument("--diarize", action="store_true", help="WhisperX diarization (requer token HF via env var).")
     ap.add_argument("--speaker-prefix", action="store_true", help="Prefixa [SPEAKER_00] no texto no ASS quando existir.")
 
+    # Estilo CapCut/Viral
+    ap.add_argument("--capcut-style", default=None, choices=list(CapcutPresets.get_preset_names()) + [None], 
+                    help="Preset de estilo CapCut/TikTok (viral_karaoke, clean_premium, tutorial_tech, etc). Se não especificado, usa estilo legacy simples.")
+    ap.add_argument("--capcut-font-size", type=int, default=None, help="Override de tamanho da fonte para preset CapCut (padrão: do preset).")
+    ap.add_argument("--capcut-uppercase", choices=["auto", "on", "off"], default="auto",
+                    help="Força CAPS (on), mantém caixa original (off) ou usa o preset (auto).")
+
+    # Estilo legacy (usado se --capcut-style não for especificado)
     ap.add_argument("--font", default="Arial")
     ap.add_argument("--font-size", type=int, default=56)
     ap.add_argument("--res", default="1920x1080", help="Resolução render (PlayResX/Y). Ex.: 1920x1080")
@@ -1272,6 +1799,32 @@ def main() -> int:
 
     glossary_map: Dict[str, str] = load_glossary(Path(args.glossary)) if args.glossary else {}
 
+    # Criar style_config baseado no preset CapCut
+    style_config: Optional[CapcutStyleConfig] = None
+    if args.capcut_style:
+        all_presets = CapcutPresets.get_all_presets()
+        if args.capcut_style in all_presets:
+            style_config = all_presets[args.capcut_style]
+            print(f"✨ Usando estilo CapCut: {args.capcut_style}")
+        else:
+            print(f"⚠️  Estilo '{args.capcut_style}' não encontrado, usando legacy")
+
+    # Overrides de CapCut (tamanho/caps) e adaptação para resolução
+    if style_config:
+        base_font_size = style_config.font_size
+        base_max_chars = style_config.max_chars_per_line
+        if args.capcut_font_size:
+            style_config.font_size = args.capcut_font_size
+        if args.capcut_uppercase == "on":
+            style_config.all_caps = True
+        elif args.capcut_uppercase == "off":
+            style_config.all_caps = False
+        # ajustar max_chars_per_line conforme largura (PlayResX) e font override
+        if base_max_chars and res:
+            scale_w = max(0.5, res[0] / 1920.0)
+            scale_font = base_font_size / style_config.font_size if style_config.font_size else 1.0
+            style_config.max_chars_per_line = max(10, int(round(base_max_chars * scale_w * scale_font)))
+
     def karaoke_engine_effective() -> str:
         eng = args.karaoke_engine
         if eng == "auto":
@@ -1309,6 +1862,7 @@ def main() -> int:
         "whisperx_model": args.whisperx_model,
         "diarize": args.diarize,
         "speaker_prefix": args.speaker_prefix,
+        "capcut_style": args.capcut_style,
         "ass_style": {
             "font": args.font,
             "font_size": args.font_size,
@@ -1377,6 +1931,7 @@ def main() -> int:
         audio_stream: Optional[int],
         auto_audio_stream: bool,
         audio_filter: Optional[str],
+        style_config: Optional[CapcutStyleConfig] = None,
     ) -> None:
         out_ass = output_dir / f"{stem}.karaoke.ass"
         out_vid = output_dir / f"{stem}.karaoke.mp4"
@@ -1449,6 +2004,7 @@ def main() -> int:
             highlight_rgb=args.highlight,
             base_rgb=args.base,
             use_speaker_prefix=args.speaker_prefix,
+            style_config=style_config,
         )
 
         burn_ass_to_video(
@@ -1542,6 +2098,7 @@ def main() -> int:
                         audio_stream=args.audio_stream,
                         auto_audio_stream=args.auto_audio_stream,
                         audio_filter=args.audio_filter,
+                        style_config=style_config,
                     )
 
                 mark_state(f, "ok", None)
