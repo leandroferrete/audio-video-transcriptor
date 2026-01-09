@@ -47,12 +47,23 @@ def detect_default_paths() -> dict:
             ffmpeg = cand
             break
 
+    # Auto-detectar WhisperX CLI local
+    whisperx_cli = None
+    for cand in [
+        BASE_DIR / "venv_whisperx" / "Scripts" / "whisperx.exe",
+        BASE_DIR / ".venv_whisperx" / "Scripts" / "whisperx.exe",
+    ]:
+        if cand.exists():
+            whisperx_cli = cand
+            break
+
     return {
         "input": inp,
         "output": outp,
         "whisper_cli": whisper_cli,
         "model": model,
         "ffmpeg": ffmpeg,
+        "whisperx_cli": whisperx_cli,
     }
 
 
@@ -230,7 +241,9 @@ class App:
         row += 1
 
         ttk.Label(right, text="Karaoke / WhisperX", font=("Segoe UI", 10, "bold")).grid(row=row, column=0, columnspan=4, sticky="w", pady=(8, 4)); row += 1
-        self.var_whisperx_cli = tk.StringVar(value="")
+        # Auto-preenche o caminho do WhisperX se detectado
+        whisperx_default = str(self.defaults.get("whisperx_cli") or "")
+        self.var_whisperx_cli = tk.StringVar(value=whisperx_default)
         self.var_whisperx_image = tk.StringVar(value="ghcr.io/jim60105/whisperx:no_model")
         self.var_whisperx_model = tk.StringVar(value="medium")
         self.var_cache_dir = tk.StringVar(value="")
@@ -322,7 +335,11 @@ class App:
         self.run_clicked()
 
     def preset_karaoke_quality(self):
-        self.var_mode.set("karaoke_whisperx_docker")
+        # Usa WhisperX local se disponível, senão Docker
+        if self.defaults.get("whisperx_cli"):
+            self.var_mode.set("karaoke_whisperx_local")
+        else:
+            self.var_mode.set("karaoke_whisperx_docker")
         self.var_quality.set("Qualidade (crf 18, preset medium)")
         self.run_clicked()
 

@@ -574,7 +574,8 @@ def whisperx_segments_to_srt_segments(ksegs: List[KaraokeSegment], speaker_prefi
 def build_karaoke_from_srt_approx(segments: List[SrtSegment], min_word_ms: int = 60) -> List[KaraokeSegment]:
     """
     Fallback SEM WhisperX:
-    - distribui o tempo do segmento igualmente entre as palavras (aproximação).
+    - distribui o tempo do segmento PROPORCIONALMENTE ao número de caracteres de cada palavra.
+    - Isso é mais realista que divisão igual, pois palavras maiores levam mais tempo para falar.
     """
     out: List[KaraokeSegment] = []
     for s in segments:
@@ -585,14 +586,28 @@ def build_karaoke_from_srt_approx(segments: List[SrtSegment], min_word_ms: int =
         words = [w for w in re.split(r"\s+", text) if w]
         if not words:
             continue
-        per = max(min_word_ms, dur // max(1, len(words)))
+        
+        # Calcular peso proporcional baseado no número de caracteres
+        # Cada palavra tem peso mínimo de 1 caractere para evitar divisão por zero
+        char_counts = [max(1, len(w)) for w in words]
+        total_chars = sum(char_counts)
+        
         cur = st_ms
         ww: List[Word] = []
         for i, w in enumerate(words):
+            # Tempo proporcional ao número de caracteres
+            word_dur = max(min_word_ms, int(round(dur * char_counts[i] / total_chars)))
+            
             w_st = cur
-            w_en = min(en_ms, cur + per) if i < len(words) - 1 else en_ms
+            # Para a última palavra, garantir que termine exatamente no final do segmento
+            if i == len(words) - 1:
+                w_en = en_ms
+            else:
+                w_en = min(en_ms, cur + word_dur)
+            
             ww.append(Word(start=w_st / 1000.0, end=w_en / 1000.0, text=w))
             cur = w_en
+        
         out.append(KaraokeSegment(start=st_ms / 1000.0, end=en_ms / 1000.0, words=ww, speaker=None))
     return out
 
@@ -620,13 +635,47 @@ def ass_color_bgr_hex(rgb_hex: str) -> str:
     return f"&H00{b}{g}{r}"
 
 
-def build_karaoke_text(words: List[Word], min_cs: int = 1) -> str:
+def build_karaoke_text(words: List[Word], min_cs: int = 1, segment_start: float = 0.0) -> str:
+    """
+    Constrói texto karaoke ASS com timing correto estilo CapCut.
+    
+    No formato ASS, a tag \\k especifica QUANDO destacar cada sílaba/palavra.
+    Os valores são CUMULATIVOS - a soma dos \\k até a palavra N indica o 
+    momento (relativo ao início do Dialogue) em que a palavra N é destacada.
+    
+    Exemplo: {\\k50}Olá {\\k30}Mundo
+    - "Olá" destaca em t=0.5s (50cs após início do Dialogue)
+    - "Mundo" destaca em t=0.8s (50cs + 30cs = 80cs após início)
+    
+    Para sincronizar corretamente, cada \\k deve representar o intervalo
+    de tempo DESDE O MOMENTO QUE A PALAVRA ANTERIOR FOI DESTACADA até
+    o momento que ESTA palavra deve ser destacada.
+    
+    Args:
+        words: Lista de palavras com timestamps absolutos (start/end em segundos)
+        min_cs: Duração mínima em centissegundos (default: 1)
+        segment_start: Timestamp de início do segmento/Dialogue (em segundos)
+    """
+    if not words:
+        return ""
+    
     parts: List[str] = []
-    for w in words:
-        dur = max(0.01, w.end - w.start)
-        cs = max(min_cs, int(round(dur * 100)))
+    
+    for i, w in enumerate(words):
+        if i == 0:
+            # Primeira palavra: tempo desde o início do segmento até esta palavra começar
+            # Se a palavra começa exatamente no início do segmento, \k0 (destaca imediatamente)
+            delay_seconds = max(0.0, w.start - segment_start)
+        else:
+            # Palavras subsequentes: tempo desde quando a palavra ANTERIOR começou
+            # até quando ESTA palavra começa
+            prev_word = words[i - 1]
+            delay_seconds = max(0.0, w.start - prev_word.start)
+        
+        cs = max(min_cs if i > 0 else 0, int(round(delay_seconds * 100)))
         safe = w.text.replace("{", "").replace("}", "")
         parts.append(r"{\k" + str(cs) + r"}" + safe + " ")
+    
     return "".join(parts).rstrip()
 
 
@@ -671,7 +720,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         prefix = ""
         if use_speaker_prefix and seg.speaker:
             prefix = f"[{seg.speaker}] "
-        text = prefix + build_karaoke_text(seg.words)
+        text = prefix + build_karaoke_text(seg.words, segment_start=seg.start)
         lines.append(f"Dialogue: 0,{start},{end},Default,,0,0,0,,{text}")
 
     out_ass.write_text("\n".join(lines), encoding="utf-8")
@@ -751,32 +800,41 @@ def run_whisperx_to_json_local(
 ) -> Path:
     """
     Executa WhisperX por CLI (instalado localmente) e pede JSON.
-    Observação: flags podem variar por build; a estratégia aqui é:
-    1) tentar um set comum
-    2) se falhar, tentar set alternativo
+    Tenta primeiro o executável diretamente; se falhar, usa python -m whisperx.
     """
     ensure_dir(out_dir)
 
-    attempts: List[List[str]] = []
     hf_token = os.environ.get(hf_token_env)
-
-    a = [whisperx_exe, str(media_path), "--model", model, "--output_dir", str(out_dir), "--output_format", "json"]
+    whisperx_path = Path(whisperx_exe)
+    
+    # Detectar o Python do mesmo venv do whisperx.exe
+    python_exe = None
+    if whisperx_path.exists():
+        venv_scripts = whisperx_path.parent
+        python_candidate = venv_scripts / "python.exe"
+        if python_candidate.exists():
+            python_exe = str(python_candidate)
+    
+    # Construir comandos - tentar múltiplas abordagens
+    attempts: List[List[str]] = []
+    
+    # Base args do WhisperX
+    base_args = [str(media_path), "--model", model, "--output_dir", str(out_dir), "--output_format", "json"]
     if language:
-        a += ["--language", language]
+        base_args += ["--language", language]
     if diarize:
-        a += ["--diarize"]
+        base_args += ["--diarize"]
     if hf_token:
-        a += ["--hf_token", hf_token]
-    attempts.append(a)
-
-    b = [whisperx_exe, str(media_path), "--model", model, "--output_dir", str(out_dir), "--output_format", "json", "--compute_type", "float16"]
-    if language:
-        b += ["--language", language]
-    if diarize:
-        b += ["--diarize"]
-    if hf_token:
-        b += ["--hf_token", hf_token]
-    attempts.append(b)
+        base_args += ["--hf_token", hf_token]
+    
+    # Tentativa 1: Usar python -m whisperx (mais confiável)
+    if python_exe:
+        attempts.append([python_exe, "-m", "whisperx"] + base_args)
+        attempts.append([python_exe, "-m", "whisperx"] + base_args + ["--compute_type", "float16"])
+    
+    # Tentativa 2: Usar o executável diretamente
+    attempts.append([whisperx_exe] + base_args)
+    attempts.append([whisperx_exe] + base_args + ["--compute_type", "float16"])
 
     last = ""
     for cmd in attempts:
@@ -1349,27 +1407,25 @@ def main() -> int:
                 wav_wx = td_path / f"{stem}_wx.wav"
                 ffmpeg_extract_wav(args.ffmpeg, media, wav_wx, audio_filter, chosen_stream)
 
-                with tempfile.TemporaryDirectory(prefix="whisperx_out_") as td:
-                    td_path = Path(td)
-                    if args.whisperx_cli:
-                        wx_json = run_whisperx_to_json_local(
-                            whisperx_exe=args.whisperx_cli,
-                            media_path=wav_wx,
-                            out_dir=td_path,
-                            model=args.whisperx_model,
-                            language=args.language,
-                            diarize=args.diarize,
-                            hf_token_env=args.hf_token_env,
-                        )
-                    else:
-                        wx_json = run_whisperx_to_json_docker(
-                            docker_bin=args.docker,
-                            image=args.whisperx_docker_image,
-                            media_path=wav_wx,
-                            out_dir=td_path,
-                            model=args.whisperx_model,
-                            language=args.language,
-                            diarize=args.diarize,
+                if args.whisperx_cli:
+                    wx_json = run_whisperx_to_json_local(
+                        whisperx_exe=args.whisperx_cli,
+                        media_path=wav_wx,
+                        out_dir=td_path,
+                        model=args.whisperx_model,
+                        language=args.language,
+                        diarize=args.diarize,
+                        hf_token_env=args.hf_token_env,
+                    )
+                else:
+                    wx_json = run_whisperx_to_json_docker(
+                        docker_bin=args.docker,
+                        image=args.whisperx_docker_image,
+                        media_path=wav_wx,
+                        out_dir=td_path,
+                        model=args.whisperx_model,
+                        language=args.language,
+                        diarize=args.diarize,
                         hf_token_env=args.hf_token_env,
                         cache_dir=Path(args.whisperx_cache_dir) if args.whisperx_cache_dir else None,
                     )
